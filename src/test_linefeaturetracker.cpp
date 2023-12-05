@@ -26,7 +26,7 @@ int main() {
         trackerData.readImage(frame);
 
         cv::Mat tmp_img;
-        cv::cvtColor(trackerData.cur_img->img, tmp_img, CV_GRAY2RGB);
+        cv::cvtColor(trackerData.cur_img->img, tmp_img, COLOR_GRAY2RGB);
 
         const vector<Line> &un_lines = trackerData.cur_img->vecLine;
         for (unsigned int j = 0; j < trackerData.cur_img->vecLine.size(); j++)
@@ -59,7 +59,7 @@ int main() {
         }
 
         cv::Mat detect_img;
-        cv::cvtColor(trackerData.cur_img->img, detect_img, CV_GRAY2RGB);
+        cv::cvtColor(trackerData.cur_img->img, detect_img, COLOR_GRAY2RGB);
 
         if (VIS_TRACK){
             LineRecord lines;
