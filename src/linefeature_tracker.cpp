@@ -1,6 +1,7 @@
 #include "linefeature_tracker.h"
 #include <math.h>
-// #include "line_descriptor/src/precomp_custom.hpp"
+#include "ELSED.h"
+#include <iostream>
 
 vector<vector<double>> param;
 int EQUALIZE = 1;
@@ -690,15 +691,6 @@ bool mergeTrackedLine(const Line &line, const Mat &merge, vector<Line> &vecline,
         abs(180 - abs(mergeAngle - thisAngle)) > angleThreshold)
         return false;
 
-    // if (sqrt((mergeMid.x - line.MidPt.x) * (mergeMid.x - line.MidPt.x) + (mergeMid.y - line.MidPt.y) * (mergeMid.y - line.MidPt.y)) < 10)
-    // {
-    //     ROS_WARN("!mergeing tracked line ..\n");
-    //     mergeStart = line.StartPt;
-    //     mergeEnd = line.EndPt;
-    //     vecline[lineIndex].resetLine();
-    //     cv::line(mergel, mergeStart, mergeEnd, lineIndex, 3);
-    //     return true;
-    // }
     if (line.StartPt.x > line.EndPt.x)
         if (mergeStart.x < line.StartPt.x && mergeStart.x > line.EndPt.x &&
             mergeEnd.x < line.StartPt.x && mergeEnd.x > line.EndPt.x)
@@ -726,7 +718,7 @@ bool mergeTrackedLine(const Line &line, const Mat &merge, vector<Line> &vecline,
     return false;
 }
 
-void LineFeatureTracker::readImage(const cv::Mat &_img)
+void LineFeatureTracker::readImage(const cv::Mat &_img, int elsed_bool)
 {
     cv::Mat img = _img;
     cv::cvtColor(_img, img, cv::COLOR_BGR2GRAY);
@@ -755,26 +747,16 @@ void LineFeatureTracker::readImage(const cv::Mat &_img)
         Sobel(img, x_arr, CV_32F, 1, 0);
         Sobel(img, y_arr, CV_32F, 0, 1);
         cartToPolar(x_arr, y_arr, forw_img->magnitude, forw_img->angle, true);
-        // ROS_WARN("success: %d \n ", forw_img->magnitude.rows);
     }
     else
     {
         forw_img.reset(new FrameLines); // 初始化一个新的帧
         forw_img->img = img;
         forw_img->img_pyr.push_back(img);
-        // ROS_WARN("compute gradient ...  ");
         Mat x_arr, y_arr;
-        // Mat x_arr0,y_arr0;
         Sobel(img, x_arr, CV_32F, 1, 0);
         Sobel(img, y_arr, CV_32F, 0, 1);
         cartToPolar(x_arr, y_arr, forw_img->magnitude, forw_img->angle, true);
-
-        // ROS_WARN("success: %d \n ", forw_img->magnitude.rows);
-        // imshow("x_arr", x_arr);
-        // imshow("y_arr", y_arr);
-        // imshow("mag", forw_img->magnitude);
-        // imshow("angle", forw_img->angle);
-        // waitKey();
     }
     chrono::steady_clock::time_point t02 = chrono::steady_clock::now();
     auto time_used0 = chrono::duration_cast<chrono::duration<double>>(t02 - t01);
@@ -784,48 +766,52 @@ void LineFeatureTracker::readImage(const cv::Mat &_img)
     float ratio = 0;
 
     double min_edline_length = 0.125;
-
+    upm::ELSED elsed;
     Ptr<cv::ximgproc::EdgeDrawing> ed = cv::ximgproc::createEdgeDrawing();
-    ed->params.EdgeDetectionOperator = cv::ximgproc::EdgeDrawing::SOBEL;
-    ed->params.GradientThresholdValue = 32;
-    ed->params.AnchorThresholdValue = 16;
-    ed->params.ScanInterval = 2;
-    ed->params.MinLineLength = min_edline_length * (std::min(img.cols, img.rows));
+    
+    if (elsed_bool){
+        elsed.params.gradientThreshold = 32;
+        elsed.params.anchorThreshold = 16;
+        elsed.params.scanIntervals = 2;
+        elsed.params.minLineLen = min_edline_length * (std::min(img.cols, img.rows));
+    } else{
+        ed->params.EdgeDetectionOperator = cv::ximgproc::EdgeDrawing::SOBEL;
+        ed->params.GradientThresholdValue = 32;
+        ed->params.AnchorThresholdValue = 16;
+        ed->params.ScanInterval = 2;
+        ed->params.MinLineLength = min_edline_length * (std::min(img.cols, img.rows));
+    }
+
     vector<Vec4f> edlines, new_edlines;
 
-    // int LINELENGTH;
     float LINELENGTH = 0;
 
 #if _SHITONG_
     if (first_img == true || cur_img->vecLine.empty())
     {
         //第一帧提取
-        ed->detectEdges(img);ed->detectLines(edlines);
+        if (elsed_bool){
+            edlines = elsed.detect(img);
+        } else{
+            ed->detectEdges(img);ed->detectLines(edlines);
+        }
+
         if (edlines.size() < linenum + addLineNum)
         {
-            ed->params.AnchorThresholdValue *= 0.5;
-            ed->params.ScanInterval *= 0.5;
-            
-            ed->detectEdges(img);ed->detectLines(edlines);
+            if (elsed_bool){
+                elsed.params.anchorThreshold *= 0.5;
+                elsed.params.scanIntervals *= 0.5;
+                edlines = elsed.detect(img);
+            } else{
+                ed->params.AnchorThresholdValue *= 0.5;
+                ed->params.ScanInterval *= 0.5;
+                ed->detectEdges(img);ed->detectLines(edlines);
+            }
         }
         cv::Mat maskl = cv::Mat(ROW, COL, CV_8UC1, 255);
         cv::Mat mergel = cv::Mat(ROW, COL, CV_8UC1, 255);
 
-        // {
-        //     vector<float> lineLength;
-
-        //     for (auto line : edlines)
-        //         lineLength.push_back(sqrt((line[0] - line[2]) * (line[0] - line[2]) + (line[1] - line[3]) * (line[1] - line[3])));
-        //     sort(lineLength.begin(), lineLength.end());
-        //     if (!lineLength.empty())
-        //         // LINELENGTH = lineLength[max(int(lineLength.size() * ratio), (int)lineLength.size() - 40)];
-        //         LINELENGTH = lineLength[int(lineLength.size() * ratio)];
-
-        //     else
-        //         LINELENGTH = 0;
-        // }
         int num = linenum + addLineNum;
-        // ROS_WARN("line Length: %f", LINELENGTH);
         int lineIndex = 0;
         for (auto line : edlines)
         {
@@ -844,10 +830,8 @@ void LineFeatureTracker::readImage(const cv::Mat &_img)
             if (ifMerge)
                 continue;
 #endif
-            // if (l.length >= LINELENGTH && goodLine(img, line))
             if (l.length >= LINELENGTH)
             {
-
                 forw_img->vecLine.push_back(l);
                 forw_img->success.push_back(-1);
                 forw_img->lineID.push_back(allfeature_cnt++);
@@ -862,14 +846,11 @@ void LineFeatureTracker::readImage(const cv::Mat &_img)
                 linerecord.push_back(linest);
 
                 forw_img->lineRec.push_back(linerecord);
-
 #endif
 #if _ONELINE_
                 break;
 #endif
                 num--;
-                // if (num <= 0)
-                //     break;
 #if _CONTROLLINEDENSE_
                 cv::line(maskl, l.StartPt, l.EndPt, 0, 30);
                 drawLine(l, mergel, lineIndex++);
@@ -881,8 +862,6 @@ void LineFeatureTracker::readImage(const cv::Mat &_img)
     {
 
         {
-            //追踪
-            // ROS_WARN("-> here : %d\n", cur_img->vecLine.size());
             OpticalFlowMultiLevel(forw_img->magnitude, forw_img->angle, cur_img->img_pyr, forw_img->img_pyr, cur_img->vecLine, forw_img->vecLine, forw_img->success);
             
             for (int i = 0; i < forw_img->vecLine.size() && i < 255; i++)
@@ -907,36 +886,14 @@ void LineFeatureTracker::readImage(const cv::Mat &_img)
                 setMerge(mergel);
 
                 //提取新的
-                // lsd_->detect(img, newlsd, 2, 1, opts, mask);
-                
-                ed->detectEdges(img);ed->detectLines(new_edlines);
-                /*if (new_edlines.size() < linenum + addLineNum)
-                {
-                    ed->params.AnchorThresholdValue *= 0.5;
-                    ed->params.ScanInterval *= 0.5;
-                    
+                //lsd_->detect(img, newlsd, 2, 1, opts, mask);
+
+                if (elsed_bool){
+                    new_edlines = elsed.detect(img);    
+                } else{
                     ed->detectEdges(img);ed->detectLines(new_edlines);
-                }*/
+                }
 
-
-
-
-                // ROS_WARN("add %d lines", newlsd.size());
-                //加到kp2里面
-
-                // {
-                //     vector<int> lineLength;
-                //     for (auto line : new_edlines)
-                //         lineLength.push_back(sqrt((line[0] - line[2]) * (line[0] - line[2]) + (line[1] - line[3]) * (line[1] - line[3])));
-                //     sort(lineLength.begin(), lineLength.end());
-                //     if (!lineLength.empty())
-                //         // LINELENGTH = lineLength[max(int(lineLength.size() * ratio), (int)lineLength.size() - 40)];
-                //         LINELENGTH = lineLength[int(lineLength.size() * ratio)];
-
-                //     else
-                //         LINELENGTH = 0;
-                //     // ROS_WARN("line Length: %f", LINELENGTH);
-                // }
                 int num = linenum - forw_img->vecLine.size() + addLineNum;
                 int lineIndex = forw_img->vecLine.size();
                 for (auto line : new_edlines)
@@ -944,9 +901,6 @@ void LineFeatureTracker::readImage(const cv::Mat &_img)
                     Line l(line);
                     bool ifMerge = false;
 #if _CONTROLLINEDENSE_
-                    // if (merge.at<uchar>(l.MidPt) != 255 &&
-                    //     (ifMerge = mergeTrackedLine(l, merge, forw_img->vecLine, mergel)))
-                    //     ;
                     if ((mergel.at<uchar>(l.MidPt) != 255 ||
                          mergel.at<uchar>(l.StartPt) != 255 ||
                          mergel.at<uchar>(l.EndPt) != 255) &&
@@ -960,8 +914,6 @@ void LineFeatureTracker::readImage(const cv::Mat &_img)
                     if (ifMerge)
                         continue;
 #endif
-                    // ROS_WARN("(%d,%d)mask", mask.at<uchar>((int)l.StartPt.x, (int)l.StartPt.y), mask.at<uchar>((int)l.EndPt.x, (int)l.EndPt.y));
-                    // if (l.length >= LINELENGTH && goodLine(img, line))
                     if (l.length >= LINELENGTH)
                     {
                         forw_img->vecLine.push_back(l);
@@ -989,9 +941,6 @@ void LineFeatureTracker::readImage(const cv::Mat &_img)
 #endif
                     }
                 }
-                // imshow("maskl",maskl);
-                // imshow("mergel", mergel);
-                // waitKey();
             }
         }
     }
